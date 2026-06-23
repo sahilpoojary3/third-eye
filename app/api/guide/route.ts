@@ -4,18 +4,15 @@ import type { Guidance, GuidanceLevel } from "@/lib/types";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-// Vision provider strategy (default: zero-key, zero-cost):
-//   1. If GEMINI_API_KEY is set, use Google Gemini (free tier with key).
-//   2. Else if ANTHROPIC_API_KEY is set, use Claude (paid).
-//   3. Else fall back to Pollinations.ai — a free, keyless proxy. Lower
-//      quality and best-effort uptime; fine for a prototype, not for a
-//      real mobility aid.
-//
-// All three return the same Guidance contract: {level, speak, details}.
+// Vision provider strategy. Each returns the same {level, speak, details}.
+//   1. OPENROUTER_API_KEY (preferred default — free vision via Llama 3.2 Vision,
+//      globally available, signup uses GitHub).
+//   2. GEMINI_API_KEY (Google Gemini, free tier, geo-restricted).
+//   3. ANTHROPIC_API_KEY (Claude, paid).
 
+const OPENROUTER_MODEL = "meta-llama/llama-3.2-11b-vision-instruct:free";
 const GEMINI_MODEL = "gemini-2.0-flash";
 const ANTHROPIC_MODEL = "claude-sonnet-4-6";
-const POLLINATIONS_MODEL = "openai";
 
 const SYSTEM_PROMPT = `You are acting as the EYES for a blind or low-vision person who is walking. Your job is real-time mobility guidance from a single camera frame.
 
@@ -123,17 +120,22 @@ async function callGemini(
   return safeParseGuidance(text);
 }
 
-async function callPollinations(
+async function callOpenRouter(
+  apiKey: string,
   imageBase64: string,
   userText: string
 ): Promise<Guidance> {
-  // Pollinations.ai exposes an OpenAI-compatible chat-completion endpoint
-  // with vision support and no auth. See https://pollinations.ai/
-  const r = await fetch("https://text.pollinations.ai/openai", {
+  // OpenRouter is an OpenAI-compatible aggregator. Free vision models exist
+  // (Llama 3.2 Vision, Qwen2-VL, etc.). Signup via GitHub OAuth, no payment.
+  const r = await fetch("https://openrouter.ai/api/v1/chat/completions", {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: {
+      "content-type": "application/json",
+      authorization: `Bearer ${apiKey}`,
+      "X-Title": "Third Eye",
+    },
     body: JSON.stringify({
-      model: POLLINATIONS_MODEL,
+      model: OPENROUTER_MODEL,
       messages: [
         { role: "system", content: SYSTEM_PROMPT },
         {
@@ -149,19 +151,18 @@ async function callPollinations(
       ],
       max_tokens: 220,
       temperature: 0.2,
-      response_format: { type: "json_object" },
     }),
     cache: "no-store",
   });
   if (!r.ok) {
     const t = await r.text().catch(() => "");
-    throw new Error(`Pollinations ${r.status}: ${t.slice(0, 300)}`);
+    throw new Error(`OpenRouter ${r.status}: ${t.slice(0, 300)}`);
   }
   const json = (await r.json()) as {
     choices?: Array<{ message?: { content?: string } }>;
   };
   const text = json.choices?.[0]?.message?.content ?? "";
-  if (!text) throw new Error("Pollinations returned no text");
+  if (!text) throw new Error("OpenRouter returned no text");
   return safeParseGuidance(text);
 }
 
@@ -196,9 +197,9 @@ async function callAnthropic(
 }
 
 export async function POST(req: Request) {
+  const openrouterKey = process.env.OPENROUTER_API_KEY;
   const geminiKey = process.env.GEMINI_API_KEY;
   const anthropicKey = process.env.ANTHROPIC_API_KEY;
-  // No keys is fine — we fall back to Pollinations.
 
   let body: RequestBody;
   try {
@@ -215,22 +216,24 @@ export async function POST(req: Request) {
     ? `Upcoming route maneuver: ${nextManeuver}. Describe the walking situation now.`
     : `Describe the walking situation now.`;
 
-  if (!geminiKey && !anthropicKey) {
+  if (!openrouterKey && !geminiKey && !anthropicKey) {
     return NextResponse.json(
       {
         level: "caution",
         speak: "Vision service not configured. Stop and use your cane.",
         details:
-          "Set GEMINI_API_KEY (free) on the server. Get one at aistudio.google.com/apikey.",
+          "Set OPENROUTER_API_KEY (free) on the server. Get one at openrouter.ai/keys.",
       } satisfies Guidance,
       { status: 500 }
     );
   }
 
   try {
-    const guidance = geminiKey
-      ? await callGemini(geminiKey, imageBase64, userText)
-      : await callAnthropic(anthropicKey!, imageBase64, userText);
+    const guidance = openrouterKey
+      ? await callOpenRouter(openrouterKey, imageBase64, userText)
+      : geminiKey
+        ? await callGemini(geminiKey, imageBase64, userText)
+        : await callAnthropic(anthropicKey!, imageBase64, userText);
     return NextResponse.json(guidance);
   } catch (err) {
     const msg = err instanceof Error ? err.message : "vision call failed";
