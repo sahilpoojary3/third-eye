@@ -10,7 +10,7 @@ export const dynamic = "force-dynamic";
 //   2. GEMINI_API_KEY (Google Gemini, free tier, geo-restricted).
 //   3. ANTHROPIC_API_KEY (Claude, paid).
 
-const OPENROUTER_MODEL = "meta-llama/llama-3.2-11b-vision-instruct:free";
+const OPENROUTER_MODEL = "nvidia/nemotron-nano-12b-v2-vl:free";
 const GEMINI_MODEL = "gemini-2.0-flash";
 const ANTHROPIC_MODEL = "claude-sonnet-4-6";
 
