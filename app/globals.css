@@ -1,0 +1,43 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+}
+
+html, body {
+  height: 100%;
+  background: #050505;
+  color: #fafafa;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* Honor the user's motion preference. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    transition-duration: 0.001ms !important;
+  }
+}
+
+/* Visible focus ring at all times — required for keyboard + low vision. */
+:focus-visible {
+  outline: 4px solid #facc15;
+  outline-offset: 3px;
+  border-radius: 6px;
+}
+
+/* Hide the visual-only live regions from sighted layout but keep them in
+   the accessibility tree. */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
