@@ -4,15 +4,18 @@ import type { Guidance, GuidanceLevel } from "@/lib/types";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-// Vision provider strategy:
-//   1. If GEMINI_API_KEY is set, use Google Gemini (free tier: 15 RPM, 1500/day).
+// Vision provider strategy (default: zero-key, zero-cost):
+//   1. If GEMINI_API_KEY is set, use Google Gemini (free tier with key).
 //   2. Else if ANTHROPIC_API_KEY is set, use Claude (paid).
-//   3. Else return a friendly "not configured" spoken error.
+//   3. Else fall back to Pollinations.ai — a free, keyless proxy. Lower
+//      quality and best-effort uptime; fine for a prototype, not for a
+//      real mobility aid.
 //
-// Both providers return the same Guidance contract: {level, speak, details}.
+// All three return the same Guidance contract: {level, speak, details}.
 
 const GEMINI_MODEL = "gemini-2.0-flash";
 const ANTHROPIC_MODEL = "claude-sonnet-4-6";
+const POLLINATIONS_MODEL = "openai";
 
 const SYSTEM_PROMPT = `You are acting as the EYES for a blind or low-vision person who is walking. Your job is real-time mobility guidance from a single camera frame.
 
@@ -120,6 +123,48 @@ async function callGemini(
   return safeParseGuidance(text);
 }
 
+async function callPollinations(
+  imageBase64: string,
+  userText: string
+): Promise<Guidance> {
+  // Pollinations.ai exposes an OpenAI-compatible chat-completion endpoint
+  // with vision support and no auth. See https://pollinations.ai/
+  const r = await fetch("https://text.pollinations.ai/openai", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      model: POLLINATIONS_MODEL,
+      messages: [
+        { role: "system", content: SYSTEM_PROMPT },
+        {
+          role: "user",
+          content: [
+            { type: "text", text: userText },
+            {
+              type: "image_url",
+              image_url: { url: `data:image/jpeg;base64,${imageBase64}` },
+            },
+          ],
+        },
+      ],
+      max_tokens: 220,
+      temperature: 0.2,
+      response_format: { type: "json_object" },
+    }),
+    cache: "no-store",
+  });
+  if (!r.ok) {
+    const t = await r.text().catch(() => "");
+    throw new Error(`Pollinations ${r.status}: ${t.slice(0, 300)}`);
+  }
+  const json = (await r.json()) as {
+    choices?: Array<{ message?: { content?: string } }>;
+  };
+  const text = json.choices?.[0]?.message?.content ?? "";
+  if (!text) throw new Error("Pollinations returned no text");
+  return safeParseGuidance(text);
+}
+
 async function callAnthropic(
   apiKey: string,
   imageBase64: string,
@@ -153,16 +198,7 @@ async function callAnthropic(
 export async function POST(req: Request) {
   const geminiKey = process.env.GEMINI_API_KEY;
   const anthropicKey = process.env.ANTHROPIC_API_KEY;
-  if (!geminiKey && !anthropicKey) {
-    return NextResponse.json(
-      {
-        level: "caution",
-        speak: "Vision service not configured. Stop and use your cane.",
-        details: "Set GEMINI_API_KEY (free) or ANTHROPIC_API_KEY on the server.",
-      } satisfies Guidance,
-      { status: 500 }
-    );
-  }
+  // No keys is fine — we fall back to Pollinations.
 
   let body: RequestBody;
   try {
@@ -178,6 +214,18 @@ export async function POST(req: Request) {
   const userText = nextManeuver
     ? `Upcoming route maneuver: ${nextManeuver}. Describe the walking situation now.`
     : `Describe the walking situation now.`;
+
+  if (!geminiKey && !anthropicKey) {
+    return NextResponse.json(
+      {
+        level: "caution",
+        speak: "Vision service not configured. Stop and use your cane.",
+        details:
+          "Set GEMINI_API_KEY (free) on the server. Get one at aistudio.google.com/apikey.",
+      } satisfies Guidance,
+      { status: 500 }
+    );
+  }
 
   try {
     const guidance = geminiKey
